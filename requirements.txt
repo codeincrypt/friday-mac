@@ -1,0 +1,9 @@
+faster-whisper>=1.1.0
+sounddevice>=0.4.6
+numpy>=1.26.0
+python-dotenv>=1.0.0
+edge-tts>=7.0.0
+pywebview>=5.3
+psutil>=5.9
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-WebKit>=10.0; sys_platform == "darwin"

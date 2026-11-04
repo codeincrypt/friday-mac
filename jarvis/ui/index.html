@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Friday</title>
+<style>
+  :root {
+    --ink: #e4f3fb;
+    --ink-dim: #9bb2c1;
+    --cyan: #35f0ff;
+    --amber: #ffb547;
+    --red: #ff5a6a;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Kohinoor Devanagari", "Devanagari Sangam MN", sans-serif;
+    --accent: var(--cyan);
+    --r: 130px;                           /* disc radius, set from JS on resize */
+    --ease: cubic-bezier(.22, 1, .36, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: transparent; color: var(--ink); font-family: var(--sans); overflow: hidden; -webkit-user-select: none; user-select: none; }
+
+  /* The shell is the whole screen and completely see-through: no tint, no blur.
+     Only the particles / waves / disc are ever drawn; the menu-bar icon is native. */
+  .shell { position: fixed; inset: 0; background: transparent; text-shadow: 0 1px 8px rgba(0,0,0,.7); }
+
+  #fx { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity .6s ease; pointer-events: none; }
+  body.open #fx { opacity: 1; transition-delay: .15s; }
+
+  /* ---------- expanded content ---------- */
+  .hud {
+    position: absolute; inset: 0; opacity: 0; transform: scale(.96); pointer-events: none;
+    transition: opacity .25s ease, transform .5s var(--ease);
+  }
+  body.open .hud { opacity: 1; transform: none; pointer-events: auto; transition: opacity .45s ease .22s, transform .8s var(--ease) .12s; }
+
+  .disc {
+    position: absolute; left: 50%; top: 50%; width: calc(var(--r) * 2); height: calc(var(--r) * 2);
+    margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1); border-radius: 50%; cursor: pointer; outline: none;
+    display: grid; place-items: center; color: var(--accent); transition: color .4s;
+  }
+  .disc svg { width: 34%; height: 34%; filter: drop-shadow(0 0 10px var(--accent)); overflow: visible; }
+  .disc .slash { opacity: 0; transition: opacity .3s; }
+  body[data-state="sleeping"] .disc .slash { opacity: 1; }
+  body[data-state="listening"] .disc svg { animation: pulse 1.2s ease-in-out infinite; }
+  body[data-state="thinking"] .disc svg { animation: pulse .8s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(1.12); } }
+
+  body[data-state="approval"] { --accent: var(--amber); }
+  body[data-state="error"] { --accent: var(--red); }
+  body[data-state="sleeping"] { --accent: #6b7a88; }
+
+  .text {
+    position: absolute; left: 50%; top: calc(50% + var(--r) * 2.25); transform: translateX(-50%);
+    width: min(780px, 90vw); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  }
+  .status { font-family: var(--mono); font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: var(--accent); transition: color .4s; }
+  .status small { display: block; letter-spacing: .04em; text-transform: none; color: var(--ink-dim); font-size: 12px; margin-top: 4px; font-family: var(--sans); }
+  .heard { font-size: 15px; color: var(--ink-dim); min-height: 20px; text-wrap: balance; }
+  .caption { font-size: 24px; line-height: 1.4; min-height: 34px; color: var(--ink); text-wrap: balance; }
+  .caption[lang="hi"] { font-size: 26px; }
+  .caption.sys { font-size: 15px; color: var(--ink-dim); }
+  body.nocap .heard, body.nocap .caption { visibility: hidden; }
+
+  /* approval is the one thing that needs a click, so it lives on the overlay */
+  .approval { display: none; width: min(460px, 90vw); margin-top: 6px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(255,181,71,.45); background: rgba(20,12,0,.45); }
+  .approval.show { display: block; }
+  .approval p { font-size: 13px; line-height: 1.4; color: #ffe2b5; margin-bottom: 10px; word-break: break-word; }
+  .approval .row { display: flex; gap: 8px; }
+  .btn { flex: 1; height: 32px; border-radius: 9px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: var(--ink); font: 600 12px var(--sans); cursor: pointer; }
+  .btn.go { background: var(--amber); color: #201300; border-color: transparent; }
+</style>
+</head>
+<body data-state="loading">
+<div class="shell">
+  <canvas id="fx"></canvas>
+
+  <div class="hud" id="hud">
+    <div class="disc" id="disc" tabindex="0" title="Click or press ⌥J to talk">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="2.5" width="6" height="11" rx="3" fill="currentColor" fill-opacity=".9" stroke="none"/>
+        <path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4M8.5 21h7"/>
+        <path class="slash" d="M4 4l16 16" stroke="#ff5a6a" stroke-width="2"/>
+      </svg>
+    </div>
+
+    <div class="text">
+      <div class="status" id="status">Initialising</div>
+      <div class="heard" id="heard"></div>
+      <div class="caption" id="caption"></div>
+      <div class="approval" id="approval">
+        <p id="approval-text"></p>
+        <div class="row">
+          <button class="btn" id="deny">Cancel · रद्द</button>
+          <button class="btn go" id="allow">Proceed · हाँ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const api = () => (window.pywebview && window.pywebview.api) || null;
+  const call = (fn, ...a) => { const x = api(); return x && x[fn] ? x[fn](...a) : Promise.resolve(null); };
+
+  const LABELS = {
+    loading:   ["Initialising", "मॉडल लोड हो रहा है"],
+    wake:      ["Standing by", ""],
+    listening: ["Listening", "सुन रहा हूँ…"],
+    thinking:  ["Thinking", "सोच रहा हूँ…"],
+    executing: ["Executing", "काम कर रहा हूँ…"],
+    speaking:  ["Speaking", ""],
+    approval:  ["Awaiting approval", "आपकी अनुमति चाहिए"],
+    sleeping:  ["Microphone off", ""],
+    error:     ["Attention", ""],
+  };
+  // [left, middle, right] gradient per state, like the cyan → violet → magenta reference
+  const PALETTES = {
+    default:  [[53, 240, 255], [154, 92, 255], [255, 47, 214]],
+    approval: [[255, 181, 71], [255, 138, 71], [255, 211, 107]],
+    error:    [[255, 90, 106], [255, 60, 90], [255, 130, 100]],
+    sleeping: [[90, 104, 118], [100, 110, 125], [120, 120, 135]],
+  };
+  let level = 0, target = 0, state = "loading";
+
+  // ---- idle (nothing drawn) <-> full-screen overlay ----
+  const ACTIVE = new Set(["listening", "thinking", "executing", "speaking", "approval", "error"]);
+  let isOpen = false, collapseTimer = null, closedAt = 0;
+  function setOpen(on) {
+    if (on === isOpen) return;
+    isOpen = on;
+    if (!on) closedAt = performance.now();
+    document.body.classList.toggle("open", on);
+    call("set_interactive", on);  // click-through while idle
+  }
+  function scheduleCollapse(ms) { clearTimeout(collapseTimer); collapseTimer = setTimeout(() => setOpen(false), ms); }
+
+  function setStatus(s, detail) {
+    const [en, hi] = LABELS[s] || [s, ""];
+    const sub = (s === "error" && detail) ? detail : (s === "executing" && detail ? detail.replace(/_/g, " ") : hi);
+    $("status").innerHTML = en + (sub ? "<small></small>" : "");
+    if (sub) $("status").querySelector("small").textContent = sub;
+  }
+
+  window.jarvis = {
+    onState(s, detail) {
+      state = s; document.body.dataset.state = s; setStatus(s, detail); if (s !== "listening") target = 0;
+      if (ACTIVE.has(s)) { setOpen(true); if (s === "error") scheduleCollapse(5000); else clearTimeout(collapseTimer); }
+      else if (isOpen) scheduleCollapse(3200);  // linger on the last reply, then fade out
+    },
+    onMessage(role, text, lang) {
+      const c = $("caption");
+      if (role === "user") { $("heard").textContent = "“" + text + "”"; }
+      else if (role === "jarvis") { c.textContent = text; c.lang = lang || "en"; c.classList.remove("sys"); }
+      else if (role === "system") { c.textContent = text; c.classList.add("sys"); }
+    },
+    onLevel(v) { target = v; },
+    onTool() {},
+    onApproval(desc) {
+      const box = $("approval");
+      if (desc) { $("approval-text").textContent = "Friday wants to " + desc; box.classList.add("show"); }
+      else box.classList.remove("show");
+    },
+    onLanguage() {},  // language is a menu-bar setting now
+    onSettings(s) {
+      if (!s) return;
+      document.body.classList.toggle("nocap", s.captions === false);
+    },
+  };
+
+  // ---------- visuals: dark disc + particle burst + wave ribbons ----------
+  const cv = $("fx"), ctx = cv.getContext("2d");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let W = 0, H = 0, DPR = 1, R = 130, cx = 0, cy = 0;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    R = Math.max(70, Math.min(W, H) * 0.15);
+    cx = W / 2; cy = H / 2;
+    document.documentElement.style.setProperty("--r", R + "px");
+  }
+  addEventListener("resize", resize); resize();
+
+  const SPOKES = 760, BINS = 28;
+  const spokes = Array.from({ length: SPOKES }, (_, i) => {
+    const a = (i / SPOKES) * Math.PI * 2;
+    return { a, r: Math.pow(Math.random(), 2.1), ph: Math.random() * 6.28,
+             bin: Math.min(BINS - 1, Math.floor(((1 + Math.cos(a)) / 2) * BINS)) };
+  });
+  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const rgb = (c, al) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${al})`;
+  const pal = PALETTES.default.map(c => c.slice());
+  const colorAt = u => u < 0.5 ? mix(pal[0], pal[1], u * 2) : mix(pal[1], pal[2], (u - 0.5) * 2);
+
+  let t = 0, rot = 0, cleared = false;
+  const ends = new Array(SPOKES);
+  function frame() {
+    requestAnimationFrame(frame);
+    // idle → draw nothing
+    if (!isOpen && performance.now() - closedAt > 1000) {
+      if (!cleared) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); cleared = true; }
+      return;
+    }
+    cleared = false;
+
+    t += 0.016;
+    const speaking = state === "speaking";
+    const busy = state === "thinking" || state === "executing";
+    const goal = speaking ? 0.35 + 0.3 * Math.abs(Math.sin(t * 7.3) * Math.sin(t * 3.1)) : busy ? 0.22 + 0.1 * Math.sin(t * 5) : target;
+    level += (goal - level) * 0.18;
+    const want = PALETTES[state] || PALETTES.default;
+    for (let i = 0; i < 3; i++) for (let k = 0; k < 3; k++) pal[i][k] += (want[i][k] - pal[i][k]) * 0.07;
+    if (!reduce) rot += busy ? 0.006 : 0.0012;
+    const motion = reduce ? 0 : 1;
+
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "lighter";
+    const energy = state === "sleeping" ? 0.25 : 1;
+
+    // --- wave ribbons, left and right ---
+    const lines = 34, steps = 90;
+    const amp = H * 0.13 * (0.38 + level * 1.5) * energy;
+    for (const side of [-1, 1]) {
+      const x0 = cx + side * R * 0.9, x1 = side < 0 ? 0 : W, span = Math.abs(x1 - x0);
+      const edge = side < 0 ? pal[0] : pal[2];
+      const g = ctx.createLinearGradient(x1, 0, x0, 0);
+      g.addColorStop(0, rgb(edge, 0));
+      g.addColorStop(0.45, rgb(edge, 0.5));
+      g.addColorStop(1, rgb(mix(edge, pal[1], 0.5), 0.7));
+      ctx.strokeStyle = g; ctx.lineWidth = 1;
+      for (let i = 0; i < lines; i++) {
+        const f = i / lines;
+        ctx.beginPath();
+        for (let s = 0; s <= steps; s++) {
+          const p = s / steps;                                   // 0 at the disc → 1 at the screen edge
+          const env = Math.sin(Math.min(1, p * 1.2) * Math.PI) * 0.95 + 0.05 * p;
+          const ph = f * (0.9 + p * 2.6) - t * 1.4 * side * motion;
+          const a = amp * env * (0.75 + 0.25 * Math.sin(f * 5 + t * 0.9 * motion));
+          const y = cy + a * Math.sin(p * 9.5 + ph + (side < 0 ? 0 : 1.3)) + (f - 0.5) * amp * 0.25 * env;
+          const x = x0 + side * p * span;
+          s ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // --- particle burst around the disc ---
+    const inner = R * 1.03, reach = R * 1.05 * energy;
+    for (let i = 0; i < SPOKES; i++) {
+      const sp = spokes[i];
+      const wob = 0.6 + 0.4 * Math.sin(sp.ph + t * (busy ? 4 : 2) * motion);
+      const len = (R * 0.05 + sp.r * reach * (0.7 + level * 1.5)) * wob;
+      const a = sp.a + rot;
+      ends[i] = [cx + Math.cos(a) * (inner + len), cy + Math.sin(a) * (inner + len)];
+    }
+    for (let b = 0; b < BINS; b++) {
+      const c = colorAt((b + 0.5) / BINS);
+      ctx.strokeStyle = rgb(c, 0.2); ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      for (let i = 0; i < SPOKES; i++) {
+        if (spokes[i].bin !== b) continue;
+        const a = spokes[i].a + rot, e = ends[i];
+        ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+        ctx.lineTo(e[0], e[1]);
+        if (i % 3 === 0) { const n = ends[(i + 5) % SPOKES]; ctx.moveTo(e[0], e[1]); ctx.lineTo(n[0], n[1]); }  // web between tips
+      }
+      ctx.stroke();
+      ctx.fillStyle = rgb(c, 0.9);
+      for (let i = 0; i < SPOKES; i++) {
+        if (spokes[i].bin !== b || spokes[i].r < 0.18) continue;
+        const e = ends[i], z = 1 + spokes[i].r * 1.4;
+        ctx.fillRect(e[0] - z / 2, e[1] - z / 2, z, z);
+      }
+    }
+
+    // --- soft halo + dark disc with gradient rim ---
+    ctx.globalCompositeOperation = "source-over";
+    const hr = R * (1.5 + level * 0.6);
+    const halo = ctx.createRadialGradient(cx, cy, R * 0.9, cx, cy, hr);
+    halo.addColorStop(0, rgb(pal[1], 0.28 + level * 0.25)); halo.addColorStop(1, rgb(pal[1], 0));
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(cx, cy, hr, 0, 6.283); ctx.fill();
+
+    const disc = ctx.createRadialGradient(cx - R * 0.2, cy - R * 0.25, R * 0.1, cx, cy, R);
+    disc.addColorStop(0, "rgba(14,34,66,.96)"); disc.addColorStop(1, "rgba(3,8,20,.98)");
+    ctx.fillStyle = disc; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283); ctx.fill();
+
+    const rim = ctx.createLinearGradient(cx - R, 0, cx + R, 0);
+    rim.addColorStop(0, rgb(pal[0], 0.95)); rim.addColorStop(0.5, rgb(pal[1], 0.9)); rim.addColorStop(1, rgb(pal[2], 0.95));
+    ctx.strokeStyle = rim; ctx.lineWidth = 2.5 + level * 2;
+    ctx.shadowColor = rgb(pal[1], 0.9); ctx.shadowBlur = 18 + level * 20;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  requestAnimationFrame(frame);
+
+  // ---- controls: voice-first. Everything else lives in the menu-bar Settings ----
+  $("disc").addEventListener("click", () => call("listen"));
+  $("allow").onclick = () => call("approve", true);
+  $("deny").onclick = () => call("approve", false);
+  $("hud").addEventListener("click", e => { if (e.target === $("hud")) { call("stop"); setOpen(false); } });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") { call("stop"); setOpen(false); }
+    else if (e.key === " ") { e.preventDefault(); call("listen"); }
+  });
+
+  window.addEventListener("pywebviewready", async () => {
+    call("set_interactive", isOpen);
+    const info = await call("get_info");
+    if (info) jarvis.onSettings(info.settings);
+  });
+  setStatus("loading");
+})();
+</script>
+</body>
+</html>
