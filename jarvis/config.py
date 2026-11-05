@@ -58,7 +58,9 @@ if not OLLAMA_HOST.startswith("http"):
     OLLAMA_HOST = "http://" + OLLAMA_HOST
 LOCAL_MODEL = os.getenv("JARVIS_LOCAL_MODEL", "qwen2.5:7b")
 LLM_TIMEOUT = _float("JARVIS_LLM_TIMEOUT", 90)
+TEMPERATURE = _float("JARVIS_TEMPERATURE", 0.2)   # low = fewer invented facts and more reliable tool calls
 MAX_HISTORY_TURNS = int(_float("JARVIS_MAX_HISTORY", 8))
+NUM_CTX = int(_float("JARVIS_NUM_CTX", 16384))   # 27 tool schemas + system prompt use ~3k of this
 
 # ---- Ears: faster-whisper (local) ----
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")  # small handles Hindi far better than base
@@ -67,10 +69,13 @@ WHISPER_THREADS = int(_float("WHISPER_THREADS", min(8, os.cpu_count() or 4)))  #
 # auto = detect Hindi/English per utterance; or force "hi" / "en"
 LANGUAGE_MODE = os.getenv("JARVIS_LANGUAGE", "auto").lower()
 SAMPLE_RATE = 16000
-SILENCE_THRESHOLD = _float("SILENCE_THRESHOLD", 0.015)
+SILENCE_THRESHOLD = _float("SILENCE_THRESHOLD", 0.008)
 SILENCE_DURATION = _float("SILENCE_DURATION", 0.7)
 MAX_RECORD_SECONDS = _float("MAX_RECORD_SECONDS", 15)
 CONVERSATION_TIMEOUT = _float("CONVERSATION_TIMEOUT", 8)
+ADAPTIVE_NOISE = _bool("JARVIS_ADAPTIVE_NOISE", True)        # threshold follows the room's noise floor
+MIN_SPEECH_SECONDS = _float("MIN_SPEECH_SECONDS", 0.15)       # less voiced audio than this = a click, ignored
+POST_SPEAK_PAUSE = _float("POST_SPEAK_PAUSE", 0.3)            # let the room go quiet before listening again
 MIC_DEVICE = os.getenv("MIC_DEVICE") or None
 if MIC_DEVICE is not None and MIC_DEVICE.isdigit():
     MIC_DEVICE = int(MIC_DEVICE)
@@ -86,9 +91,13 @@ SAY_VOICE_EN = os.getenv("JARVIS_SAY_VOICE_EN", "Daniel")
 SAY_VOICE_HI = os.getenv("JARVIS_SAY_VOICE_HI", "Lekha")
 SAY_RATE = int(_float("JARVIS_SAY_RATE", 185))
 
+CACHE_MAX_MB = _float("JARVIS_CACHE_MAX_MB", 50)   # voice-cache size cap; oldest clips are pruned
+
 # ---- Behaviour ----
 SAFE_MODE = _bool("JARVIS_SAFE_MODE", True)
 HOTKEY = os.getenv("JARVIS_HOTKEY", "option+j")
+# Transcripts can contain email text, passwords read aloud, etc. Off = log only timings/languages.
+LOG_TRANSCRIPTS = _bool("JARVIS_LOG_TRANSCRIPTS", False)
 
 for d in (SUPPORT_DIR, CACHE_DIR):
     try:

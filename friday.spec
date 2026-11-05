@@ -6,7 +6,7 @@ datas = [("jarvis/ui", "jarvis/ui"), ("assets", "assets")]
 binaries = []
 hiddenimports = [
     "webview.platforms.cocoa", "objc", "AppKit", "Foundation", "WebKit", "Quartz",
-    "PyObjCTools", "UniformTypeIdentifiers", "Security",
+    "PyObjCTools", "UniformTypeIdentifiers", "Security", "AVFoundation",
 ]
 
 for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "sounddevice",
@@ -48,6 +48,7 @@ app = BUNDLE(
         "CFBundleShortVersionString": "2.0",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
+        "LSUIElement": True,   # menu-bar only: no Dock icon (the setup wizard re-enables it at runtime)
         "LSApplicationCategoryType": "public.app-category.productivity",
         "NSMicrophoneUsageDescription": "Friday listens for your voice commands in English and Hindi. Audio is transcribed locally on this Mac.",
         "NSAppleEventsUsageDescription": "Friday controls apps such as Chrome, Mail, Music and Finder when you ask it to.",

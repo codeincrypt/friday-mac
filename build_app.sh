@@ -22,6 +22,8 @@ cat > "$APP/Contents/MacOS/Friday" <<EOF
 #!/bin/bash
 LOG="\$HOME/Library/Application Support/Friday/launch.log"
 mkdir -p "\$(dirname "\$LOG")"
+# keep launch.log from growing forever
+[ -f "\$LOG" ] && [ "\$(stat -f%z "\$LOG")" -gt 1000000 ] && mv -f "\$LOG" "\$LOG.old"
 cd "$PROJECT"
 export PYTHONUNBUFFERED=1
 exec "$PY" "$PROJECT/app.py" >>"\$LOG" 2>&1
@@ -54,6 +56,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Friday listens for your voice commands in English and Hindi. Audio is transcribed locally on this Mac.</string>

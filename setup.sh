@@ -68,7 +68,7 @@ cat <<'EOF'
 
 First launch — macOS will ask for permissions. Allow them for "Friday":
   • Microphone                       (to hear you)
-  • Accessibility + Input Monitoring  (Option+J hotkey, typing, shortcuts)
+  • Accessibility                     (typing and key presses; Option+J needs no permission)
     System Settings → Privacy & Security → add Friday.app
   • Automation pop-ups for Chrome / Mail / Music → click OK
 

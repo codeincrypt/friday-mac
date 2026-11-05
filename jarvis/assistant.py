@@ -135,7 +135,7 @@ class Assistant:
         heard = self.ears.listen(wake_gate=True)
         if heard is None or self._ptt.is_set() or not self._typed.empty():
             return
-        log.info("wake-listen heard: %s", heard.text)
+        log.info("wake word heard%s", f": {heard.text}" if config.LOG_TRANSCRIPTS else "")
         if not contains_wake_word(heard.text):
             return
         rest = strip_wake_word(heard.text)

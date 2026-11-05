@@ -18,6 +18,7 @@ from .prompts import system_prompt
 log = logging.getLogger("jarvis.brain")
 
 MAX_TOOL_ROUNDS = 6
+MAX_TOOL_RESULT_CHARS = 1500   # a long shell/clipboard result must not crowd the context window
 
 
 class BrainUnavailable(RuntimeError):
@@ -106,18 +107,27 @@ class LocalBrain:
 
     # ---------- main ----------
     def handle(self, text: str, lang: str = "en") -> str:
+        """Run one user turn. If anything fails half-way the history is restored,
+        so a timeout never leaves an unanswered user turn or a tool call with no result."""
+        checkpoint = list(self.history)
+        try:
+            return self._run_turn(text, lang)
+        except BaseException:
+            self.history = checkpoint
+            raise
+
+    def _run_turn(self, text: str, lang: str) -> str:
         self.history.append({"role": "user", "content": f"[lang={lang}] {text}"})
         self._trim()
-        reply = ""
         for _ in range(MAX_TOOL_ROUNDS):
             msg = self._chat()
             content = _THINK.sub("", msg.get("content") or "").strip()
-            calls = msg.get("tool_calls") or _text_tool_calls(content)
+            text_calls = [] if msg.get("tool_calls") else _text_tool_calls(content)
+            calls = msg.get("tool_calls") or text_calls
             if not calls:
-                reply = content
-                self.history.append({"role": "assistant", "content": reply})
-                break
-            self.history.append({"role": "assistant", "content": "" if _text_tool_calls(content) else content,
+                self.history.append({"role": "assistant", "content": content})
+                return content
+            self.history.append({"role": "assistant", "content": "" if text_calls else content,
                                  "tool_calls": calls})
             for call in calls:
                 fn = call.get("function", {})
@@ -128,11 +138,13 @@ class LocalBrain:
                     except Exception:
                         pass
                 result = toolbox.execute(name, args, confirm=self.confirm)
-                log.info("tool %s -> %s", name, result[:200])
+                log.info("tool %s -> %s", name, result[:60].replace("\n", " "))
+                if len(result) > MAX_TOOL_RESULT_CHARS:
+                    result = result[:MAX_TOOL_RESULT_CHARS] + " …[truncated]"
                 self.history.append({"role": "tool", "content": result, "tool_name": name})
-        else:
-            reply = "That's taking more steps than I'd like. Let's try it a different way." if lang == "en" \
-                else "इसमें बहुत सारे स्टेप लग रहे हैं, कृपया थोड़ा अलग तरीक़े से बताइए।"
+        reply = "That's taking more steps than I'd like. Let's try it a different way." if lang == "en" \
+            else "इसमें बहुत सारे स्टेप लग रहे हैं, कृपया थोड़ा अलग तरीक़े से बताइए।"
+        self.history.append({"role": "assistant", "content": reply})  # keep the history well-formed
         return reply
 
     def _chat(self) -> dict:
@@ -142,7 +154,7 @@ class LocalBrain:
             "tools": toolbox.TOOLS,
             "stream": False,
             "keep_alive": "30m",
-            "options": {"temperature": 0.4, "num_ctx": 8192},
+            "options": {"temperature": config.TEMPERATURE, "num_ctx": config.NUM_CTX},
         }
         if re.match(r"(qwen3|deepseek-r1|gpt-oss)", self.model):
             payload["think"] = False

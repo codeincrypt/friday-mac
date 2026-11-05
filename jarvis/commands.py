@@ -60,13 +60,42 @@ def _clean_target(s: str) -> str:
     return s.strip()
 
 
+def _only(t: str, vocab: set) -> bool:
+    """True if EVERY word is part of the command's vocabulary. Keyword intents
+    (battery, screenshot, dark mode…) use this so "how do I take a screenshot on
+    Windows" or "my phone battery is dying" go to the LLM instead of firing."""
+    words = t.split()
+    return bool(words) and len(words) <= 8 and all(w in vocab for w in words)
+
+
+_FILLER = {"friday", "फ्राइडे", "the", "my", "a", "an", "it", "now", "mac", "macbook", "me", "show", "tell", "check", "get",
+           "karo", "kar", "do", "de", "dijiye", "kijiye", "batao", "bataiye", "dikhao", "lo", "le", "ek",
+           "करो", "कर", "दो", "दीजिए", "कीजिए", "बताओ", "बताइए", "दिखाओ", "लो", "ले", "एक", "मेरा", "मेरी", "मैक", "का", "की", "है", "ज़रा"}
+_BATTERY = _FILLER | {"battery", "level", "status", "percentage", "percent", "left", "life", "what", "whats", "is",
+                      "how", "much", "do", "i", "have", "kitni", "kitna", "kitne", "hai", "kya", "kaisi",
+                      "बैटरी", "कितनी", "कितना", "कैसी", "लेवल", "स्टेटस", "प्रतिशत", "क्या", "बची", "बचा"}
+_STATUS = _FILLER | {"system", "status", "how", "hows", "is", "doing", "cpu", "ram", "usage", "memory", "what", "whats",
+                     "kaisa", "haal", "chal", "raha", "ka", "सिस्टम", "स्टेटस", "कैसा", "हाल", "चल", "रहा", "क्या", "सीपीयू", "रैम"}
+_SCREENSHOT = _FILLER | {"take", "capture", "grab", "screenshot", "screen", "shot", "स्क्रीनशॉट", "स्क्रीन", "शॉट", "ka", "का"}
+_LOCK = _FILLER | {"lock", "screen", "स्क्रीन", "लॉक"}
+_DARK = _FILLER | {"toggle", "switch", "turn", "on", "off", "to", "dark", "light", "mode", "enable", "disable", "theme",
+                   "change", "डार्क", "लाइट", "मोड", "चालू", "बंद", "थीम", "बदलो"}
+_GOODBYE = {"friday", "फ्राइडे", "now", "karo", "kar", "do", "करो", "कर", "दो", "goodbye", "good", "bye", "alvida", "shut", "down", "power", "thanks", "thank", "you", "so", "much",
+            "see", "later", "अलविदा", "शट", "डाउन", "बंद", "हो", "जाओ", "धन्यवाद", "शुक्रिया"}
+
+_THE_NONAPP = re.compile(r"^(?:run|start|kill|close|quit|exit)\s+(?:the|a|an|my)\s+(.+)$")
+_UP_BY = re.compile(r"\b(?:by|se)\b|से")
+_SET_TO = re.compile(r"\b(?:to|at|set)\b|%|\bpercent\b|पर|प्रतिशत")
+
+
 def parse(text: str) -> Command | None:
     t = normalise(text)
     if not t:
         return None
 
     # --- session control (always fast, even inside compound sentences) ---
-    if re.search(r"\b(goodbye|good bye|bye friday|shut down|power down|alvida)\b|अलविदा|शट डाउन|बंद हो जाओ", t):
+    if re.search(r"\b(goodbye|good bye|bye|shut down|power down|alvida)\b|अलविदा|शट डाउन|बंद हो जाओ", t) \
+            and _only(t, _GOODBYE):
         return Command("_goodbye")
     if re.fullmatch(r"(?:stop listening|go to sleep|sleep|so jao|chup ho jao|सो जाओ|सुनना बंद करो|चुप हो जाओ|आराम करो)", t):
         return Command("_sleep")
@@ -78,33 +107,46 @@ def parse(text: str) -> Command | None:
 
     # --- time / date / battery / status ---
     if re.search(r"\b(what(?:'?s| is) the time|time (?:is it|kya hai|batao)|current time|kitne baje|samay kya)\b|"
-                 r"कितने बजे|टाइम क्या|टाइम बताओ|समय क्या|समय बताओ|वक़्त क्या|वक्त क्या|^time$|^टाइम$|^समय$", t):
+                 r"कितने बजे|टाइम क्या|टाइम बताओ|समय क्या|समय बताओ|वक़्त क्या|वक्त क्या|^time$|^टाइम$|^समय$", t) \
+            and len(t.split()) <= 7:
         return Command("get_time")
     if re.search(r"\b(what(?:'?s| is) the date|today'?s date|what day is|date kya|aaj kya date|aaj kaun sa din)\b|"
-                 r"तारीख|डेट क्या|डेट बताओ|आज कौन सा दिन|आज क्या दिन|^date$", t):
+                 r"तारीख|डेट क्या|डेट बताओ|आज कौन सा दिन|आज क्या दिन|^date$", t) \
+            and len(t.split()) <= 7:
         return Command("get_date")
-    if re.search(r"battery|बैटरी", t):
+    if re.search(r"battery|बैटरी", t) and _only(t, _BATTERY):
         return Command("get_battery")
-    if re.search(r"\b(system status|how(?:'?s| is) my mac|mac (?:ka|kaisa) (?:haal|chal)|cpu|ram usage|memory usage)\b|"
-                 r"सिस्टम स्टेटस|सिस्टम कैसा|मैक कैसा|मैक का हाल", t):
+    if re.search(r"\b(system status|hows? my mac|how is my mac|mac (?:ka|kaisa) (?:haal|chal)|cpu|ram usage|memory usage)\b|"
+                 r"सिस्टम स्टेटस|सिस्टम कैसा|मैक कैसा|मैक का हाल", t) and _only(t, _STATUS):
         return Command("system_status")
 
     # --- volume ---
     if re.search(VOL_WORD, t):
-        m = re.search(N, t)
-        if m and re.search(r"\b(set|to|kar do|karo|पर|कर दो|करो|%|percent|प्रतिशत)\b|%|पर|कर", t):
-            return Command("set_volume", {"level": int(m.group(1))})
         if re.search(r"\b(unmute|on karo|chalu)\b|अनम्यूट|चालू", t):
             return Command("mute", {"on": False})
         if re.search(r"\b(mute|band|bandh|off)\b|म्यूट|बंद|बन्द", t):
             return Command("mute", {"on": True})
-        if re.search(UP_WORD, t):
+        m = re.search(N, t)
+        up, down = re.search(UP_WORD, t), re.search(DOWN_WORD, t)
+        if m:
+            n = int(m.group(1))
+            # "volume up 20" / "volume 20 kam karo" nudge; "volume 50", "set volume to 50", "आवाज़ 30 पर" set
+            if (up or down) and not _SET_TO.search(t):
+                return Command("change_volume", {"delta": n if up and not down else -n})
+            return Command("set_volume", {"level": n})
+        if up:
             return Command("change_volume", {"delta": 10})
-        if re.search(DOWN_WORD, t):
+        if down:
             return Command("change_volume", {"delta": -10})
-    if re.fullmatch(r"(?:mute|म्यूट करो|म्यूट|mute karo)", t):
+    if re.fullmatch(r"(?:(?:make it|turn it|a bit|a little|bit|slightly|thoda|zara)\s+)*(louder|quieter|softer|turn up|turn down|lower|raise)", t):
+        return Command("change_volume", {"delta": 10 if re.search(r"louder|up|raise", t) else -10})
+    if re.fullmatch(r"(?:turn it|make it)\s+(up|down)", t):
+        return Command("change_volume", {"delta": 10 if t.endswith("up") else -10})
+    if re.fullmatch(r"(?:mute|म्यूट करो|म्यूट|mute karo)", t) or \
+            re.fullmatch(r"mute (?:the |my )?(?:music|sound|audio|speakers|mac)", t):
         return Command("mute", {"on": True})
-    if re.fullmatch(r"(?:unmute|अनम्यूट करो|अनम्यूट|unmute karo)", t):
+    if re.fullmatch(r"(?:unmute|अनम्यूट करो|अनम्यूट|unmute karo)", t) or \
+            re.fullmatch(r"unmute (?:the |my )?(?:music|sound|audio|speakers|mac)", t):
         return Command("mute", {"on": False})
 
     # --- media ---
@@ -117,8 +159,14 @@ def parse(text: str) -> Command | None:
             return Command("media_control", {"command": "pause"})
         if re.search(r"\b(play|resume|chalao|bajao|lagao)\b|" + PLAY_HI, t):
             return Command("media_control", {"command": "play"})
-    if re.fullmatch(r"(?:next song|next track|skip)", t):
+    if re.fullmatch(r"(?:next song|next track|skip|skip song|skip track)", t):
         return Command("media_control", {"command": "next"})
+    if re.fullmatch(r"(?:previous|prev|previous song|previous track|last song|go back)", t):
+        return Command("media_control", {"command": "previous"})
+    if re.fullmatch(r"(?:pause|pause it|pause playback|पॉज़|पॉज)", t):
+        return Command("media_control", {"command": "pause"})
+    if re.fullmatch(r"(?:play|resume|resume playback|continue playing|play it)", t):
+        return Command("media_control", {"command": "play"})
 
     # --- YouTube ---
     m = (re.fullmatch(rf"(?:play|search)\s+(.+?)\s+on\s+{_YT}", t)
@@ -138,12 +186,19 @@ def parse(text: str) -> Command | None:
             return Command("web_search", {"query": q})
 
     # --- screenshot / lock / dark mode ---
-    if re.search(r"screenshot|स्क्रीनशॉट|स्क्रीन शॉट", t):
+    if re.search(r"screenshot|स्क्रीनशॉट|स्क्रीन शॉट", t) and _only(t.replace("स्क्रीन शॉट", "स्क्रीनशॉट"), _SCREENSHOT):
         return Command("take_screenshot")
-    if re.search(r"\block (?:the )?screen\b|screen lock|स्क्रीन लॉक|लॉक करो", t):
+    if re.search(r"\block (?:the )?screen\b|screen lock|स्क्रीन लॉक|लॉक करो", t) and _only(t, _LOCK):
         return Command("lock_screen")
-    if re.search(r"dark mode|डार्क मोड|light mode|लाइट मोड", t):
+    if re.search(r"dark mode|डार्क मोड|light mode|लाइट मोड", t) and _only(t, _DARK):
         return Command("toggle_dark_mode")
+
+    # "run the tests", "close the door", "kill the lights": not apps unless we know the name
+    mt = _THE_NONAPP.match(t)
+    if mt:
+        from .actions import APP_ALIASES
+        if mt.group(1).strip() not in APP_ALIASES:
+            return None
 
     # --- close app ---
     m = (re.fullmatch(r"(?:close|quit|exit|kill)\s+(.+)", t)

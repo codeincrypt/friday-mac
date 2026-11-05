@@ -6,6 +6,7 @@ Launched by Friday.app (see build_app.sh) or directly: `python app.py`.
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -14,20 +15,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from jarvis import config  # noqa: E402
+from jarvis import config, onboarding  # noqa: E402
 
+from logging.handlers import RotatingFileHandler  # noqa: E402
+
+_handlers = [RotatingFileHandler(config.LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8")]
+if sys.stderr and sys.stderr.isatty():   # from the .app, stderr is launch.log — don't duplicate into it
+    _handlers.append(logging.StreamHandler())
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    handlers=[logging.FileHandler(config.LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
+    handlers=_handlers,
 )
 log = logging.getLogger("jarvis.app")
 
 import webview  # noqa: E402
 
 from jarvis.assistant import Assistant, Callbacks  # noqa: E402
+from jarvis.hotkey import CarbonHotkey, parse_or_default, pretty  # noqa: E402
 
 UI_FILE = ROOT / "jarvis" / "ui" / "index.html"
+SETUP_FILE = ROOT / "jarvis" / "ui" / "setup.html"
 
 
 SETTINGS_FILE = config.SUPPORT_DIR / "ui_settings.json"
@@ -157,6 +165,7 @@ def toggle_window():
 
 
 _status_item = None
+_hotkey_holder: list = []   # keeps the Carbon hotkey (and its C callback) alive
 # (arc colour, dashed-ring colour) per assistant state — same palette as the orb
 _ICON_COLORS = {
     "default":  ((0.21, 0.94, 1.00), (0.60, 0.36, 1.00)),
@@ -264,7 +273,10 @@ def install_macos_extras():
             set_lang({"Auto (हिंदी + English)": "auto", "English": "en", "हिंदी": "hi"}[str(sender.title())])
 
         def openLog_(self, _sender):
-            os.system(f'open "{config.SUPPORT_DIR}"')
+            subprocess.Popen(["open", str(config.SUPPORT_DIR)])
+
+        def setupAgain_(self, _sender):
+            bg(_run_setup_again)
 
         def quit_(self, _sender):
             bg(_quit)
@@ -312,11 +324,12 @@ def install_macos_extras():
         add(settings, "Show captions", "captions:", tag="captions")
         add(settings, None, None)
         add(settings, "Open settings & logs folder", "openLog:")
+        add(settings, "Run setup again…", "setupAgain:")
 
         menu = NSMenu.alloc().init()
         menu.setDelegate_(_menu_target)
         settings.setDelegate_(_menu_target)
-        add(menu, "Listen now  (⌥J)", "listen:")
+        add(menu, f"Listen now  ({pretty(parse_or_default(config.HOTKEY))})", "listen:")
         add(menu, "Show / Hide Friday", "showHide:")
         add(menu, None, None)
         sub = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Settings", None, "")
@@ -326,32 +339,40 @@ def install_macos_extras():
         add(menu, "Quit Friday", "quit:", "q")
         _status_item.setMenu_(menu)
 
-        # Global hotkey (needs Accessibility / Input Monitoring permission).
-        key_mask = 1 << 10                 # NSEventMaskKeyDown
-        option_flag = 1 << 19              # NSEventModifierFlagOption
-        hot_char = (config.HOTKEY.split("+")[-1] or "j").lower()
+        # Global hotkey. Carbon RegisterEventHotKey swallows the key (no "∆" typed into the
+        # focused app) and needs no permission; the NSEvent monitor is only a fallback.
+        hk = parse_or_default(config.HOTKEY)
+        _hotkey_holder.append(CarbonHotkey(hk, assistant.push_to_talk))
+        if _hotkey_holder[0].register():
+            log.info("hotkey %s registered (Carbon)", hk.label)
+        else:
+            log.warning("falling back to an NSEvent hotkey monitor (needs Input Monitoring; "
+                        "the key press will also reach the focused app)")
+            key_mask = 1 << 10             # NSEventMaskKeyDown
+            wanted = hk.ns_flags
+            relevant = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)   # shift ctrl option cmd
 
-        def matches(event):
-            try:
-                return (event.modifierFlags() & option_flag) and \
-                    (event.charactersIgnoringModifiers() or "").lower() == hot_char
-            except Exception:
-                return False
+            def matches(event):
+                try:
+                    return (event.modifierFlags() & relevant) == wanted and \
+                        (event.charactersIgnoringModifiers() or "").lower() == hk.key
+                except Exception:
+                    return False
 
-        def global_handler(event):
-            if matches(event):
-                assistant.push_to_talk()
+            def global_handler(event):
+                if matches(event):
+                    assistant.push_to_talk()
 
-        def local_handler(event):
-            if matches(event):
-                assistant.push_to_talk()
-                return None
-            return event
+            def local_handler(event):
+                if matches(event):
+                    assistant.push_to_talk()
+                    return None
+                return event
 
-        _monitors = [
-            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(key_mask, global_handler),
-            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(key_mask, local_handler),
-        ]
+            _monitors = [
+                NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(key_mask, global_handler),
+                NSEvent.addLocalMonitorForEventsMatchingMask_handler_(key_mask, local_handler),
+            ]
         log.info("menu bar + hotkey installed")
 
     AppHelper.callAfter(build)
@@ -400,8 +421,22 @@ def set_click_through(on: bool):
         log.debug("click-through toggle failed: %s", e)
 
 
+def set_dock_visible(visible: bool):
+    """Friday lives in the menu bar only. Accessory policy = no Dock icon and no Cmd-Tab entry
+    (the status item, its menu and the Option+J hotkey are unaffected). The setup wizard is a
+    normal window, so it turns the Dock icon back on."""
+    try:
+        from AppKit import NSApplication
+        from PyObjCTools import AppHelper
+        policy = 0 if visible else 1      # NSApplicationActivationPolicyRegular / Accessory
+        AppHelper.callAfter(lambda: NSApplication.sharedApplication().setActivationPolicy_(policy))
+    except Exception as e:
+        log.debug("activation policy change skipped: %s", e)
+
+
 def boot(window):
     ui.window = window
+    set_dock_visible(False)
     install_macos_extras()
     make_overlay()
     threading.Thread(target=assistant.run, name="jarvis-loop", daemon=True).start()
@@ -424,8 +459,89 @@ def brand_process():
         log.debug("branding skipped: %s", e)
 
 
+def _relaunch(extra_env: dict | None = None):
+    """Replace this process with a fresh Friday (same PID, so macOS keeps the
+    microphone permission attributed to Friday.app)."""
+    argv = [sys.executable] + ([] if getattr(sys, "frozen", False) else sys.argv)
+    os.environ.update(extra_env or {})
+    os.execv(sys.executable, argv)
+
+
+def _run_setup_again():
+    """Menu: Settings > Run setup again…"""
+    onboarding.reset_marker()
+    assistant.shutdown()
+    os.environ.pop("FRIDAY_SKIP_SETUP", None)
+    _relaunch({"FRIDAY_FORCE_SETUP": "1"})
+
+
+class SetupApi:
+    """What the setup window (jarvis/ui/setup.html) may call."""
+
+    def __init__(self, setup: "onboarding.Setup", window_ref: list):
+        self._setup = setup          # underscore: pywebview must not expose or walk it
+        self._win = window_ref
+
+    def get_state(self):
+        return self._setup.snapshot()
+
+    def get_hotkey(self):
+        return pretty(parse_or_default(config.HOTKEY))
+
+    def choose_model(self, model):
+        self._setup.choose_model(str(model))
+
+    def start(self, model=None):
+        self._setup.start(str(model) if model else None)
+
+    def retry(self):
+        self._setup.retry()
+
+    def skip(self, step):
+        self._setup.skip(str(step))
+
+    def open_settings(self, pane):
+        return onboarding.open_settings(str(pane))
+
+    def open_url(self, url):
+        return onboarding.open_url(str(url))
+
+    def finish(self):
+        if self._setup.finish():
+            self._win[0].destroy()   # ends webview.start(); main() then relaunches into the real app
+
+
+def run_setup() -> bool:
+    """First-run wizard in its own normal window (so System Settings stays usable
+    on top of it). Returns True when the user finished it."""
+    setup = onboarding.Setup()
+    win: list = []
+    window = webview.create_window(
+        "Friday Setup", url=str(SETUP_FILE), js_api=SetupApi(setup, win),
+        width=940, height=680, min_size=(820, 620), background_color="#060a14",
+    )
+    win.append(window)
+
+    def push(snap):
+        try:
+            window.evaluate_js(f"window.setup && setup.onState({json.dumps(snap, ensure_ascii=False)})")
+        except Exception as e:
+            log.debug("setup push failed: %s", e)
+
+    setup.push = push
+    set_dock_visible(True)
+    webview.start(debug=os.getenv("JARVIS_DEBUG") == "1")
+    setup.cancel()
+    return setup.finished
+
+
 def main():
     brand_process()
+    if onboarding.needs_setup():
+        if run_setup():
+            os.environ.pop("FRIDAY_FORCE_SETUP", None)
+            _relaunch({"FRIDAY_SKIP_SETUP": "1"})   # reload config with the model the wizard chose
+        os._exit(0)
     try:
         scr = webview.screens[0]
         width, height = int(scr.width), int(scr.height)

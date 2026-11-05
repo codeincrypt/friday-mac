@@ -24,9 +24,10 @@ chmod +x setup.sh build_app.sh
 ~4.7 GB), downloads the Whisper `small` speech model (~480 MB), caches the voice lines,
 and installs **Friday.app** into `/Applications`. Then open Friday from Spotlight.
 
-**On first launch, allow:** Microphone · Accessibility + Input Monitoring (System
-Settings → Privacy & Security → add Friday) for the hotkey and typing · the one-time
-Automation pop-ups for Chrome, Mail and Music.
+**On first launch**, a setup window installs the local AI and walks you through the
+permissions: Microphone · Accessibility (System Settings → Privacy & Security → add
+Friday) for typing and key presses · the one-time Automation pop-ups for Chrome, Mail and
+Music. The `⌥J` hotkey needs no permission.
 
 ## How it works
 
@@ -59,7 +60,7 @@ Automation pop-ups for Chrome, Mail and Music.
 - **Type instead:** use the input box (English or Hindi).
 - **Stop:** press `Esc`, or say "stop" / "रुको". Say "stop listening" / "सो जाओ" to turn the mic off. Say "goodbye" / "अलविदा" to quit.
 - **Language chip** (`AUTO / EN / हिं`): Auto detects the language each time. Lock it to हिं if Hindi is mis-detected in a noisy room.
-- **Safety:** sending email, running shell commands, and trashing files always ask first. Answer by voice ("haan" / "नहीं") or with the buttons.
+- **Safety:** sending email, running shell commands, trashing files, typing into a terminal, Cmd+Q and opening apps/scripts always ask first. Answer by voice ("haan" / "नहीं") or with the buttons.
 
 ## Tuning (`.env`)
 
@@ -73,6 +74,6 @@ Automation pop-ups for Chrome, Mail and Music.
 | Different voice | `edge-tts --list-voices`, then set `JARVIS_VOICE_EN` / `JARVIS_VOICE_HI` |
 
 Logs: `~/Library/Application Support/Friday/` (menu bar → *Open settings & logs folder*).
-Terminal mode for debugging: `./venv/bin/python main.py`. Tests: `python tests/test_core.py && python tests/test_flow.py`.
+Terminal mode for debugging: `./venv/bin/python main.py`. Tests: `./venv/bin/python tests/test_core.py && ./venv/bin/python tests/test_flow.py && ./venv/bin/python tests/test_setup.py`.
 
 > About the voice: Ryan (British male, slightly lowered pitch) is the default stock voice. You can change it with `JARVIS_VOICE_PITCH` / `JARVIS_VOICE_RATE`.

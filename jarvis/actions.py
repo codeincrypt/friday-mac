@@ -82,7 +82,10 @@ def open_app(name: str) -> str:
     if ok:
         return f"Opened {app}."
     # fuzzy: ask Spotlight for an application whose name contains the words
-    ok2, found = _run(["mdfind", f'kMDItemContentType == "com.apple.application-bundle" && kMDItemDisplayName == "*{app}*"cd'])
+    safe = re.sub(r'["\\*]', "", app)  # keep user text out of the Spotlight query syntax
+    if not safe.strip():
+        return f"I couldn't find an app called {name}."
+    ok2, found = _run(["mdfind", f'kMDItemContentType == "com.apple.application-bundle" && kMDItemDisplayName == "*{safe}*"cd'])
     candidates = [line for line in found.splitlines() if line.endswith(".app")] if ok2 else []
     if candidates:
         candidates.sort(key=len)
@@ -94,8 +97,19 @@ def open_app(name: str) -> str:
 
 def quit_app(name: str) -> str:
     app = resolve_app(name)
+    ok, listing = osascript('tell application "System Events" to get name of every application process')
+    if ok:  # don't let `tell application "<typo>" to quit` launch something
+        running = {n.strip().lower() for n in listing.split(",")}
+        if app.lower() not in running:
+            return f"Couldn't close {app}: it isn't running."
     ok, out = osascript(f'tell application "{_esc(app)}" to quit')
     return f"Closed {app}." if ok else f"Couldn't close {app}: {out}"
+
+
+def frontmost_app() -> str:
+    """Name of the app the user is looking at ('' if it can't be read)."""
+    ok, out = osascript('tell application "System Events" to get name of first application process whose frontmost is true')
+    return out if ok else ""
 
 
 def list_running_apps() -> str:
@@ -104,8 +118,18 @@ def list_running_apps() -> str:
 
 
 # ---------- web ----------
+SAFE_URL_SCHEMES = ("http", "https", "mailto", "tel", "facetime", "maps")
+
+
 def open_url(url: str) -> str:
-    if not re.match(r"^[a-z]+://", url):
+    url = (url or "").strip()
+    m = (re.match(r"^([a-z][a-z0-9+.-]*)://", url, re.I)
+         or re.match(r"^(mailto|tel|facetime|maps|javascript|data|file|x-[\w.-]+):", url, re.I))
+    if m:
+        scheme = m.group(1).lower()
+        if scheme not in SAFE_URL_SCHEMES:
+            return f"I only open web links, not {scheme}: addresses."
+    else:  # "github.com", "localhost:3000"
         url = "https://" + url
     ok, out = _run(["open", url])
     return f"Opened {url}." if ok else f"Couldn't open {url}: {out}"
@@ -216,8 +240,22 @@ def find_files(query: str, folder: str = "", limit: int = 5) -> str:
     return "Found: " + "; ".join(hits)
 
 
+# Things that run code when "opened" — the toolbox asks before opening these.
+EXECUTABLE_SUFFIXES = {".app", ".command", ".sh", ".zsh", ".bash", ".tool", ".pkg", ".dmg", ".scpt",
+                       ".scptd", ".workflow", ".terminal", ".jar", ".py", ".pl", ".rb", ".action", ".webloc"}
+
+
+def resolve_path(path: str) -> Path:
+    return FOLDERS.get(path.strip().lower()) or Path(os.path.expanduser(path))
+
+
+def opens_executable(path: str) -> bool:
+    p = resolve_path(path)
+    return p.suffix.lower() in EXECUTABLE_SUFFIXES or (p.is_file() and os.access(p, os.X_OK))
+
+
 def open_path(path: str) -> str:
-    p = FOLDERS.get(path.strip().lower()) or Path(os.path.expanduser(path))
+    p = resolve_path(path)
     if not p.exists():
         return f"{path} doesn't exist."
     ok, out = _run(["open", str(p)])
@@ -228,6 +266,9 @@ def create_folder(path: str) -> str:
     p = Path(os.path.expanduser(path))
     if not p.is_absolute():
         p = HOME / "Desktop" / p
+    p = p.resolve()
+    if p != HOME and HOME not in p.parents:
+        return "I only create folders inside your home folder."
     p.mkdir(parents=True, exist_ok=True)
     return f"Created folder {p}."
 

@@ -75,12 +75,51 @@ _FUNCS = {
 
 NEEDS_CONFIRMATION = {"send_email", "run_shell", "move_to_trash"}
 
+# Keystroke tools are harmless in Notes but equal to run_shell in a terminal, so they
+# are gated by context rather than always (see needs_confirmation).
+TERMINAL_APPS = {"terminal", "iterm2", "iterm", "warp", "ghostty", "kitty", "alacritty", "hyper",
+                 "wezterm", "tabby", "rio", "cool-retro-term"}
+_RUNS_COMMAND_KEYS = {"return", "enter"}
+_DESTRUCTIVE_KEYS = {"q", "delete", "backspace", "w"}
+
 assert {t["function"]["name"] for t in TOOLS} == set(_FUNCS), "TOOLS and _FUNCS out of sync"
 
 _SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in TOOLS}
 
 
+def _key_parts(shortcut: str) -> tuple[set, set]:
+    parts = [p.strip().lower() for p in str(shortcut).replace("-", "+").split("+") if p.strip()]
+    mods = {"cmd", "command", "shift", "option", "alt", "ctrl", "control"}
+    return {p for p in parts if p in mods}, {p for p in parts if p not in mods}
+
+
+def needs_confirmation(name: str, args: dict) -> bool:
+    """Static NEEDS_CONFIRMATION plus context rules for tools that are only
+    dangerous in some situations. Called with already-coerced args."""
+    if name in NEEDS_CONFIRMATION:
+        return True
+    if name in ("type_text", "press_keys"):
+        front = actions.frontmost_app().lower()
+        in_terminal = front in TERMINAL_APPS
+        if name == "type_text":
+            return in_terminal or "\n" in args.get("text", "")
+        mods, keys = _key_parts(args.get("shortcut", ""))
+        if in_terminal and keys & _RUNS_COMMAND_KEYS:
+            return True
+        # Cmd+Q / Cmd+Delete / Cmd+W: quit, trash, close without asking
+        return bool(mods & {"cmd", "command"}) and bool(keys & _DESTRUCTIVE_KEYS)
+    if name == "open_path":
+        return actions.opens_executable(args.get("path", ""))
+    return False
+
+
 def describe(name: str, args: dict) -> str:
+    if name == "type_text":
+        return f"type {args.get('text', '')[:80]!r} into {actions.frontmost_app() or 'the front app'}"
+    if name == "press_keys":
+        return f"press {args.get('shortcut')} in {actions.frontmost_app() or 'the front app'}"
+    if name == "open_path":
+        return f"open {args.get('path')} (it can run code)"
     if name == "send_email":
         return f"send an email to {args.get('to')} — subject: {args.get('subject')!r}"
     if name == "run_shell":
@@ -88,6 +127,18 @@ def describe(name: str, args: dict) -> str:
     if name == "move_to_trash":
         return f"move to Trash: {args.get('path')}"
     return f"{name}({json.dumps(args, ensure_ascii=False)})"
+
+
+def loggable(name: str, args: dict) -> dict:
+    """Arguments safe to write to the log: no email bodies, typed text or clipboard contents."""
+    if name == "send_email":
+        return {"to": args.get("to"), "subject": args.get("subject"), "body": f"<{len(args.get('body', ''))} chars>"}
+    if name in ("type_text", "set_clipboard"):
+        return {"text": f"<{len(args.get('text', ''))} chars>"}
+    if name == "run_shell":
+        cmd = args.get("command", "")
+        return {"command": cmd[:60] + ("…" if len(cmd) > 60 else "")}
+    return args
 
 
 def _coerce(name: str, args) -> dict:
@@ -129,10 +180,10 @@ def execute(name: str, args, confirm=None) -> str:
         args = _coerce(name, args)
     except (ValueError, TypeError) as e:
         return f"Invalid arguments for {name}: {e}"
-    if config.SAFE_MODE and name in NEEDS_CONFIRMATION:
+    if config.SAFE_MODE and needs_confirmation(name, args):
         if confirm is None or not confirm(describe(name, args)):
             return "The user declined, so this action was NOT performed."
-    log.info("tool %s %s", name, args)
+    log.info("tool %s %s", name, loggable(name, args))
     try:
         return _FUNCS[name](**args)
     except Exception as e:

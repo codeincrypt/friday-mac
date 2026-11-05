@@ -7,3 +7,4 @@ pywebview>=5.3
 psutil>=5.9
 pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
 pyobjc-framework-WebKit>=10.0; sys_platform == "darwin"
+pyobjc-framework-AVFoundation>=10.0; sys_platform == "darwin"
